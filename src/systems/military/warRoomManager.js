@@ -379,7 +379,10 @@ function parseLootInfo(raw) {
 function parseLootNote(text) {
   if (!text || typeof text !== 'string') return null;
   const out = {};
-  const moneyMatch = text.match(/looted\s+\$([\d,]+(?:\.\d+)?)/i);
+  // Not anchored to a specific preceding word — the VICTORY sentence says
+  // "looted $X" but the ALLIANCELOOT sentence says "taking: $X", and these
+  // sentences only ever contain one dollar figure, so a bare match is safe.
+  const moneyMatch = text.match(/\$([\d,]+(?:\.\d+)?)/);
   if (moneyMatch) out.MONEY = parseFloat(moneyMatch[1].replace(/,/g,''));
   const resourceNames = Object.keys(LOOT_RESOURCE_INFO).filter(k => k !== 'MONEY');
   const pattern = new RegExp(`([\\d,]+(?:\\.\\d+)?)\\s+(${resourceNames.join('|')})\\b`, 'gi');
@@ -405,7 +408,13 @@ function formatLootLine(lootObj) {
 function getLootLineForAttack(attack) {
   let line = formatLootLine(parseLootInfo(attack.loot_info));
   if (line) return line;
-  line = formatLootLine(parseLootNote(attack.note));
+  // loot_info is actually the natural-language sentence itself (confirmed
+  // via live data on 2026-09-06), not a separate structured format — the
+  // earlier JSON/map-string attempt above never matches it, which is why
+  // this was always falling through to "nothing was looted". This was also
+  // pointed at a nonexistent `attack.note` field before; fixed to read the
+  // sentence from loot_info directly.
+  line = formatLootLine(parseLootNote(attack.loot_info));
   if (line) return line;
   if ((attack.moneystolen||0) > 0) return `💵 Money: **$${Number(attack.moneystolen).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}**`;
   return null;
@@ -491,15 +500,6 @@ function buildAttackReport(attack, ctx={}) {
   // resistance is finished off. ALLIANCELOOT = resources looted from that
   // nation's ALLIANCE. Both show a full resource breakdown when available,
   // and explicitly say so when nothing was looted rather than omitting it.
-  if (normType === 'VICTORY' || normType === 'ALLIANCELOOT') {
-    // TEMP DIAGNOSTIC: loot reporting has been wrong twice now despite two
-    // different parsing strategies (loot_info as JSON/map-string, then a
-    // 'note' sentence field) — logging the actual raw values here so the
-    // real cause is visible on the next VICTORY/ALLIANCELOOT attack instead
-    // of guessing a third time. Uses logger.info so it isn't filtered out
-    // on Railway's production log level. Remove once confirmed/fixed.
-    logger.info(`LOOT DEBUG: type=${attack.type} id=${attack.id} moneystolen=${JSON.stringify(attack.moneystolen)} loot_info=${JSON.stringify(attack.loot_info)} note=${JSON.stringify(attack.note)}`);
-  }
   if (normType === 'VICTORY') {
     const lootLine = getLootLineForAttack(attack);
     embed.addFields({ name:'🏆 Looted from Nation', value: lootLine || 'Nothing was looted.', inline:false });

@@ -6,7 +6,7 @@
 
 const { ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { query, run, queryOne } = require('../../utils/database');
-const { pwQuery, MEMBER_POSITIONS } = require('../../utils/pwApi');
+const { pwQuery, MEMBER_POSITIONS, getNation, searchNationByName, getNationWars } = require('../../utils/pwApi');
 const { buildNationToDiscordMap } = require('../../utils/nationLink');
 const { isLegitimateCounter } = require('../../utils/counterDetector');
 const { getGif, normalizeAttackType } = require('../../utils/attackGifs');
@@ -876,6 +876,46 @@ async function reconcileRoomPermissions(client, guild, guildId, room) {
 // Discord account if they weren't linked at the time of their attack (and
 // fixing their channel access once they are), and reconciling every active
 // room's permissions against current role configuration.
+// Targeted recovery for ONE specific channel — used by /warroom card when
+// the channel isn't tracked. Guesses the enemy nation from the channel
+// name, checks whether they currently have an active war against our
+// alliance, and if so routes through the normal getOrCreateWarRoom path
+// (which will detect any stale DB row pointing at a deleted duplicate and
+// adopt THIS channel by name-match) — without needing to wait for or run
+// a full alliance-wide /warroom sync.
+async function recoverWarRoomChannel(client, guild, guildId, channel, allianceId) {
+  const guessedName = channel.name.replace(/^⚔️-/, '').replace(/-/g, ' ').trim();
+  if (!guessedName) return { error: 'Could not guess an enemy name from this channel\'s name.' };
+
+  const candidate = await searchNationByName(guessedName);
+  if (!candidate) return { error: `Could not find any nation matching "${guessedName}" from this channel's name.` };
+
+  const wars = await getNationWars(candidate.id);
+  const allianceIdStr = String(allianceId);
+  const relevantWars = wars.filter(w => String(w.att_alliance_id) === allianceIdStr || String(w.def_alliance_id) === allianceIdStr);
+  if (relevantWars.length === 0) {
+    return { error: `Found nation **${candidate.nation_name}**, but they have no active war against our alliance right now — nothing to recover.` };
+  }
+
+  const enemyNation = await getNation(candidate.id);
+  if (!enemyNation) return { error: 'Could not fetch full nation data for the matched enemy.' };
+
+  const discordMap = buildNationToDiscordMap(guildId);
+  let recovered = 0;
+  for (const war of relevantWars) {
+    const isOff = String(war.att_alliance_id) === allianceIdStr;
+    const ourNationId = isOff ? war.attid : war.defid;
+    const ourNationName = isOff ? war.attacker?.nation_name : war.defender?.nation_name;
+    const ourDiscordId = discordMap.get(ourNationId) || discordMap.get(String(ourNationId)) || null;
+
+    const enrichedWar = { id: war.id, isOurAttack: isOff, ourNationId, turnsleft: war.turnsleft };
+    const result = await getOrCreateWarRoom(client, guild, guildId, enemyNation, ourDiscordId, ourNationName, enrichedWar, false, null);
+    if (result) recovered++;
+  }
+
+  return { recovered, enemyName: enemyNation.nation_name, warsFound: relevantWars.length };
+}
+
 async function runWarRoomSync(client, guild, guildId, allianceId, { includeOffensive = true } = {}) {
   const summary = { created:0, adopted:0, addedToExisting:0, existing:0, relinked:0, inactive:0, skipped:0, permissionsFixed:0, errors:[], defWarsCount:0, offWarsCount:0 };
   const allianceIdStr = String(allianceId);
@@ -995,4 +1035,4 @@ async function removeMemberFromWarRoom(client, guild, guildId, nationId, warId) 
   } catch (err) { logger.error(`removeMemberFromWarRoom: ${err.message}`); }
 }
 
-module.exports = { getOrCreateWarRoom, removeMemberFromWarRoom, buildWarButtons, fetchWarData, fetchNationData, sendUnifiedWarCard, checkWarRoomAttacks, isInactiveNation, daysSinceActive, closeWarRoomForInactivity, INACTIVITY_DAYS, runWarRoomSync, reconcileRoomPermissions, createPlannedWarRoom };
+module.exports = { getOrCreateWarRoom, removeMemberFromWarRoom, buildWarButtons, fetchWarData, fetchNationData, sendUnifiedWarCard, checkWarRoomAttacks, isInactiveNation, daysSinceActive, closeWarRoomForInactivity, INACTIVITY_DAYS, runWarRoomSync, reconcileRoomPermissions, createPlannedWarRoom, recoverWarRoomChannel };

@@ -123,9 +123,10 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setTitle('✅ War Room Sync Complete')
-        .setColor((summary.created + summary.addedToExisting + summary.relinked) > 0 ? 0x2ecc71 : 0x95a5a6)
+        .setColor((summary.created + summary.adopted + summary.addedToExisting + summary.relinked) > 0 ? 0x2ecc71 : 0x95a5a6)
         .addFields(
           { name: '🆕 New Rooms',        value: `${summary.created}`,  inline: true },
+          { name: '🔄 Adopted (recovered)', value: `${summary.adopted}`, inline: true },
           { name: '➕ Added as Member',  value: `${summary.addedToExisting}`, inline: true },
           { name: '🔗 Retroactively Linked', value: `${summary.relinked}`, inline: true },
           { name: '✅ Already Tracked',  value: `${summary.existing}`, inline: true },

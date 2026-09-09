@@ -669,7 +669,29 @@ async function createWarRoom(client, guild, guildId, enemyNation, ourDiscordId, 
   if (govRole) overwrites.push({ id:govRole.discord_role_id, allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages] });
 
   const safeName = (enemyNation.nation_name||'unknown').toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').slice(0,80);
-  const channel  = await guild.channels.create({ name:`⚔️-${safeName}`, type:ChannelType.GuildText, parent:category.id, topic:`War vs ${enemyNation.nation_name} | ${enemyNation.alliance?.name||'None'}`, permissionOverwrites:overwrites });
+
+  // Before creating a brand new channel, check whether one already exists
+  // in this category matching this enemy's name but isn't tracked in the
+  // database — e.g. the bot's database was reset (fresh Railway deploy,
+  // migrated to new hosting, etc.) while the actual Discord channels
+  // survived untouched. Adopting it avoids creating a confusing duplicate
+  // channel right next to the real one.
+  const trackedChannelIds = new Set(query('SELECT channel_id FROM war_rooms WHERE guild_id=?', [guildId]).rows.map(r => r.channel_id));
+  const expectedName = `⚔️-${safeName}`;
+  let channel = guild.channels.cache.find(c => c.parentId === category.id && c.name === expectedName && !trackedChannelIds.has(c.id));
+  let adopted = false;
+
+  if (channel) {
+    adopted = true;
+    logger.info(`Adopting existing untracked channel "${channel.name}" for ${enemyNation.nation_name} — database was reset but the Discord channel survived.`);
+    // Bring permissions up to date immediately rather than waiting for the
+    // next sync's reconciliation pass.
+    if (guild.roles.everyone) await channel.permissionOverwrites.edit(guild.roles.everyone, { ViewChannel:false }).catch(()=>{});
+    if (milRole) await channel.permissionOverwrites.create(milRole.discord_role_id, { ViewChannel:true, SendMessages:true }).catch(()=>{});
+    if (govRole) await channel.permissionOverwrites.create(govRole.discord_role_id, { ViewChannel:true, SendMessages:true }).catch(()=>{});
+  } else {
+    channel = await guild.channels.create({ name:expectedName, type:ChannelType.GuildText, parent:category.id, topic:`War vs ${enemyNation.nation_name} | ${enemyNation.alliance?.name||'None'}`, permissionOverwrites:overwrites });
+  }
 
   run(`INSERT INTO war_rooms (guild_id,channel_id,enemy_nation_id,enemy_nation_name,enemy_alliance_name,status) VALUES(?,?,?,?,?,'active')`,
     [guildId, channel.id, enemyNation.id, enemyNation.nation_name, enemyNation.alliance?.name||'None']);
@@ -683,13 +705,17 @@ async function createWarRoom(client, guild, guildId, enemyNation, ourDiscordId, 
   if (ourDiscordId) await channel.permissionOverwrites.create(ourDiscordId, {ViewChannel:true,SendMessages:true}).catch(()=>{});
 
   const link = ourDiscordId ? `<@${ourDiscordId}>` : `**${ourMemberName}**`;
-  await channel.send({ content:`${link} joined the fray! ⚔️`+(isCounter?`\n🔄 **COUNTER WAR** — _${counterDetail}_`:'') });
+  await channel.send({ content: adopted
+    ? `🔄 Recovered tracking for this room after a database reset. ${link} joined the fray! ⚔️`
+    : `${link} joined the fray! ⚔️`
+  }).catch(()=>{});
+  if (isCounter) await channel.send({ content: `🔄 **COUNTER WAR** — _${counterDetail}_` }).catch(()=>{});
 
   const roomFull = queryOne('SELECT * FROM war_rooms WHERE id=?', [roomId]);
   await sendUnifiedWarCard(channel, roomFull);
 
-  logger.info(`War room created: ${channel.name} for war ${war.id}`);
-  return { id:roomId, channel_id:channel.id };
+  logger.info(`War room ${adopted ? 'adopted' : 'created'}: ${channel.name} for war ${war.id}`);
+  return { id:roomId, channel_id:channel.id, adopted };
 }
 
 // Creates a war room AHEAD of any actual declaration, for a target the
@@ -851,7 +877,7 @@ async function reconcileRoomPermissions(client, guild, guildId, room) {
 // fixing their channel access once they are), and reconciling every active
 // room's permissions against current role configuration.
 async function runWarRoomSync(client, guild, guildId, allianceId, { includeOffensive = true } = {}) {
-  const summary = { created:0, addedToExisting:0, existing:0, relinked:0, inactive:0, skipped:0, permissionsFixed:0, errors:[], defWarsCount:0, offWarsCount:0 };
+  const summary = { created:0, adopted:0, addedToExisting:0, existing:0, relinked:0, inactive:0, skipped:0, permissionsFixed:0, errors:[], defWarsCount:0, offWarsCount:0 };
   const allianceIdStr = String(allianceId);
 
   let allWars = [];
@@ -927,6 +953,7 @@ async function runWarRoomSync(client, guild, guildId, allianceId, { includeOffen
 
         const result = await getOrCreateWarRoom(client, guild, guildId, enemyNation, ourDiscordId, ourNation.nation_name, enrichedWar, counterResult.isCounter, counterResult.detail);
         if (result && existingRoom) summary.addedToExisting++;
+        else if (result && result.adopted) summary.adopted++;
         else if (result) summary.created++;
         else summary.skipped++;
 

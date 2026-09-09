@@ -4,7 +4,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, ChannelType } = require('discord.js');
 const { run, queryOne, query } = require('../../utils/database');
-const { isInactiveNation, sendUnifiedWarCard, runWarRoomSync, createPlannedWarRoom } = require('../../systems/military/warRoomManager');
+const { isInactiveNation, sendUnifiedWarCard, runWarRoomSync, createPlannedWarRoom, recoverWarRoomChannel } = require('../../systems/military/warRoomManager');
 const { resolveNation, getAllianceMembers } = require('../../utils/pwApi');
 const { getLinkedNation, buildNationToDiscordMap } = require('../../utils/nationLink');
 
@@ -89,9 +89,32 @@ module.exports = {
     if (sub === 'card') {
       await interaction.deferReply({ flags: 64 });
 
-      const room = queryOne(`SELECT * FROM war_rooms WHERE guild_id=? AND channel_id=? AND status='active'`, [interaction.guildId, interaction.channelId]);
+      let room = queryOne(`SELECT * FROM war_rooms WHERE guild_id=? AND channel_id=? AND status='active'`, [interaction.guildId, interaction.channelId]);
+
       if (!room) {
-        return interaction.editReply('❌ This channel isn\'t an active war room (or the room was closed). Run this command inside the war room channel itself.');
+        // Not tracked — try to recover it directly rather than just saying
+        // "not a war room". This covers the case where the database was
+        // reset (new hosting, etc.) and a duplicate channel got created and
+        // was manually deleted afterward, leaving the original channel
+        // untracked even though it's clearly still a real war room.
+        const guildRow = queryOne('SELECT alliance_id FROM guilds WHERE guild_id=?', [interaction.guildId]);
+        if (!guildRow?.alliance_id) {
+          return interaction.editReply('❌ This channel isn\'t an active war room, and no alliance is configured to try recovering it.');
+        }
+
+        await interaction.editReply('🔍 Not tracked yet — checking if this channel matches an active war...');
+        const recovery = await recoverWarRoomChannel(interaction.client, interaction.guild, interaction.guildId, interaction.channel, guildRow.alliance_id);
+        if (recovery.error) {
+          return interaction.editReply(`❌ ${recovery.error}`);
+        }
+
+        room = queryOne(`SELECT * FROM war_rooms WHERE guild_id=? AND channel_id=? AND status='active'`, [interaction.guildId, interaction.channelId]);
+        if (!room) {
+          return interaction.editReply(`⚠️ Found **${recovery.enemyName}** with an active war, but couldn't attach it to this exact channel — it may have created a separate room instead. Check the category for a duplicate.`);
+        }
+        // Room was just recovered and its card already sent by the recovery
+        // path itself — no need to build a second one below.
+        return interaction.editReply(`✅ Recovered tracking for this room (matched **${recovery.enemyName}**, ${recovery.warsFound} active war(s)) — card posted above.`);
       }
 
       const memberCount = query('SELECT COUNT(*) as c FROM war_room_members WHERE war_room_id=?', [room.id]).rows[0]?.c || 0;

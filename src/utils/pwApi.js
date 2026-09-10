@@ -133,7 +133,7 @@ async function getNation(nationId) {
         }
       }
     }
-  `, { id: [nationId] });
+  `, { id: [parseInt(nationId)] });
 
   const nation = data?.nations?.data?.[0] || null;
   if (nation) setCache(key, nation, CACHE_TIMES.nation);

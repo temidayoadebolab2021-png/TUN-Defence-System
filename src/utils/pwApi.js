@@ -371,7 +371,6 @@ async function getNationWars(nationId) {
           def_alliance_id
           attacker { nation_name score }
           defender { nation_name score }
-          status
           turnsleft
         }
       }

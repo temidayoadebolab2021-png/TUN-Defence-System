@@ -10,6 +10,7 @@ const cache = new Map();
 const CACHE_TIMES = {
   nation:   5  * 60 * 1000,
   alliance: 10 * 60 * 1000,
+  tradeprices: 60 * 60 * 1000, // prices move slowly — 1 hour is plenty fresh and saves API budget
 };
 
 const MEMBER_POSITIONS = ['MEMBER', 'OFFICER', 'HEIR', 'LEADER'];
@@ -129,6 +130,7 @@ async function getNation(nationId) {
           offensive_wars_count
           defensive_wars_count
           last_active
+          warpolicy
           alliance { name }
         }
       }
@@ -358,6 +360,45 @@ async function getAllianceMembers(allianceId) {
 // ─────────────────────────────────────────────────────────────
 // WARS
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// TRADE PRICES — current average market price per resource
+// Confirmed schema: `tradeprices(limit: Int = 30): [Tradeprice]` returns
+// recent snapshots (Tradeprice { coal, oil, uranium, lead, iron, bauxite,
+// gasoline, munitions, steel, aluminum, food, date }). No orderBy is
+// exposed, so this sorts client-side by date and takes the most recent.
+// ─────────────────────────────────────────────────────────────
+async function getLatestTradePrices() {
+  const key = 'tradeprices_latest';
+  const hit = getFromCache(key);
+  if (hit) return hit;
+
+  const data = await pwQuery(`
+    query GetTradePrices {
+      tradeprices {
+        date
+        coal
+        oil
+        uranium
+        lead
+        iron
+        bauxite
+        gasoline
+        munitions
+        steel
+        aluminum
+        food
+      }
+    }
+  `, {});
+
+  const snapshots = data?.tradeprices || [];
+  if (snapshots.length === 0) return null;
+
+  const latest = [...snapshots].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+  setCache(key, latest, CACHE_TIMES.tradeprices);
+  return latest;
+}
+
 async function getNationWars(nationId) {
   const data = await pwQuery(`
     query GetWars($id: [Int]) {
@@ -408,6 +449,6 @@ module.exports = {
   pwQuery,
   getNation, searchNationByName, resolveNation,
   getAllianceInfo, searchAllianceByName, resolveAlliance,
-  getAllianceMembers, getNationWars,
+  getAllianceMembers, getNationWars, getLatestTradePrices,
   clearCache, MEMBER_POSITIONS,
 };

@@ -299,6 +299,16 @@ function resolveAttackName(nationId, ctx) {
   return `Nation #${nationId}`;
 }
 
+// "Name of Alliance" — matches P&W's own native phrasing convention. Falls
+// back to just the plain name if the alliance is unknown or "None".
+function resolveAttackDisplay(nationId, ctx) {
+  const isOur = String(nationId) === String(ctx?.ourNationId);
+  const isEnemy = String(nationId) === String(ctx?.enemyNationId);
+  const name = isOur ? (ctx?.ourNationName||'Our Member') : isEnemy ? (ctx?.enemyNationName||'Enemy') : `Nation #${nationId}`;
+  const alliance = isOur ? ctx?.ourAllianceName : isEnemy ? ctx?.enemyAllianceName : null;
+  return (alliance && alliance !== 'None') ? `${name} of ${alliance}` : name;
+}
+
 // Human-friendly names for the P&W AttackType enum — nobody outside the
 // game knows what "AIRVAIR" or "AIRVSHIPS" means, so we translate these
 // for the war room reports.
@@ -449,6 +459,8 @@ function buildAttackReport(attack, ctx={}) {
   const typeInfo     = getAttackTypeInfo(attack.type);
   const attName      = resolveAttackName(attack.attid, ctx);
   const defName      = resolveAttackName(attack.defid, ctx);
+  const attDisplay   = resolveAttackDisplay(attack.attid, ctx);
+  const defDisplay   = resolveAttackDisplay(attack.defid, ctx);
   const normType     = normalizeAttackType(attack.type);
   const isPeace      = normType === 'PEACE';
   const isFortify    = normType === 'FORTIFY';
@@ -477,13 +489,13 @@ function buildAttackReport(attack, ctx={}) {
     .setTitle(isPeaceAccept ? '🕊️ Peace Accepted' : `${typeInfo.emoji} ${typeInfo.label}`)
     .setDescription(
       isPeaceAccept
-        ? `**${attName}** has accepted peace from **${defName}**.`
+        ? `**${attDisplay}** has accepted peace from **${defDisplay}**.`
         : isPeace
-        ? `**${attName}** ${typeInfo.verb} **${defName}**.`
+        ? `**${attDisplay}** ${typeInfo.verb} **${defDisplay}**.`
         : isFortify
-        ? `**${attName}** ${typeInfo.verb} **${defName}**.`
-        : `**[${attName}](https://politicsandwar.com/nation/id=${attack.attid})** ${typeInfo.verb} ` +
-          `**[${defName}](https://politicsandwar.com/nation/id=${attack.defid})** — it was ${resultText}!`
+        ? `**${attDisplay}** ${typeInfo.verb} **${defDisplay}**.`
+        : `**[${attDisplay}](https://politicsandwar.com/nation/id=${attack.attid})** ${typeInfo.verb} ` +
+          `**[${defDisplay}](https://politicsandwar.com/nation/id=${attack.defid})** — it was ${resultText}!`
     );
 
   if ((attack.infra_destroyed||0)>0) {
@@ -554,17 +566,26 @@ async function checkWarRoomAttacks(client) {
   // call per room-member — this is what actually frees up headroom to
   // poll more often within P&W's daily request quota.
   const warMap = new Map(); // war_id -> { room, ctx }
+  const guildAllianceNames = new Map(); // guild_id -> alliance_name, avoids re-querying per room
   for (const room of rooms) {
+    if (!guildAllianceNames.has(room.guild_id)) {
+      const g = queryOne('SELECT alliance_name FROM guilds WHERE guild_id=?', [room.guild_id]);
+      guildAllianceNames.set(room.guild_id, g?.alliance_name || null);
+    }
+    const ourAllianceName = guildAllianceNames.get(room.guild_id);
+
     const members = query('SELECT DISTINCT war_id, nation_id, nation_name FROM war_room_members WHERE war_room_id=?', [room.id]).rows;
     for (const { war_id, nation_id, nation_name } of members) {
       if (!war_id || warMap.has(String(war_id))) continue;
       warMap.set(String(war_id), {
         room,
         ctx: {
-          ourNationId:     nation_id,
-          ourNationName:   nation_name,
-          enemyNationId:   room.enemy_nation_id,
-          enemyNationName: room.enemy_nation_name,
+          ourNationId:      nation_id,
+          ourNationName:    nation_name,
+          ourAllianceName,
+          enemyNationId:    room.enemy_nation_id,
+          enemyNationName:  room.enemy_nation_name,
+          enemyAllianceName: room.enemy_alliance_name,
         },
       });
     }

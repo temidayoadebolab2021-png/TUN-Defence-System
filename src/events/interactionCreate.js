@@ -110,7 +110,7 @@ async function handleWarCounter(interaction, warId, client) {
 
     const lines = eligible.slice(0, 15).map(m => {
       const dId = discordMap.get(m.id) || discordMap.get(String(m.id));
-      return `${dId ? `<@${dId}>` : `**${m.nation_name}**`} — [${m.nation_name}](https://politicsandwar.com/nation/id=${m.id})\n└ Score: ${Math.round(m.score).toLocaleString()} | ✈️ ${m.aircraft||0} | 🚗 ${m.tanks||0} | Slots: **${5-(m.offensive_wars_count||0)}**`;
+      return `${dId ? `<@${dId}>` : `**${m.nation_name}**`} — [${m.nation_name}](https://politicsandwar.com/nation/id=${m.id})\n└ Score: ${Math.round(m.score).toLocaleString()} | 👮 ${(m.soldiers||0).toLocaleString()} | 🚗 ${(m.tanks||0).toLocaleString()} | ✈️ ${m.aircraft||0} | 🚢 ${m.ships||0} | Slots: **${5-(m.offensive_wars_count||0)}**`;
     });
 
     await interaction.editReply({ embeds: [new EmbedBuilder().setTitle(`⚔️ Counter Options vs ${enemyData.nation_name}`).setColor(0xe74c3c).setDescription(lines.join('\n\n')).addFields({ name: '📏 War Range', value: `${Math.round(min).toLocaleString()} – ${Math.round(max).toLocaleString()}`, inline: true }).setFooter({ text: `${eligible.length} eligible` }).setTimestamp()] });

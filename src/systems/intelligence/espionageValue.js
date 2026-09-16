@@ -73,9 +73,9 @@ function parseEspionageReport(text) {
 }
 
 // Computes total worth and victory-loot estimate. `prices` is a Tradeprice
-// snapshot ({coal, oil, ...}), `defenderPolicy` is the target's current
-// warpolicy string (e.g. "GUARDIAN") or null/undefined if unknown.
-function computeEspionageWorth(report, prices, defenderPolicy) {
+// snapshot ({coal, oil, ...}), `defenderPolicy`/`attackerPolicy` are
+// warpolicy strings (e.g. "GUARDIAN") or null/undefined if unknown.
+function computeEspionageWorth(report, prices, defenderPolicy, attackerPolicy) {
   let totalWorth = report.money || 0;
   const breakdown = [];
   for (const key of RESOURCE_NAMES) {
@@ -89,9 +89,11 @@ function computeEspionageWorth(report, prices, defenderPolicy) {
   const baseLoot = totalWorth * BASE_LOOT_RATE;
 
   const defenderMod = LOOT_POLICY_MODIFIERS[String(defenderPolicy||'').toUpperCase()] || 0;
-  const defenderAdjustedLoot = baseLoot * (1 + defenderMod / 100);
+  const attackerMod = LOOT_POLICY_MODIFIERS[String(attackerPolicy||'').toUpperCase()] || 0;
+  const totalMod = defenderMod + attackerMod;
+  const adjustedLoot = baseLoot * (1 + totalMod / 100);
 
-  return { totalWorth, baseLoot, defenderMod, defenderAdjustedLoot, breakdown };
+  return { totalWorth, baseLoot, defenderMod, attackerMod, totalMod, adjustedLoot, breakdown };
 }
 
 module.exports = { parseEspionageReport, computeEspionageWorth, LOOT_POLICY_MODIFIERS, BASE_LOOT_RATE, RESOURCE_DISPLAY };

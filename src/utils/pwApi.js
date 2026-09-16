@@ -185,6 +185,7 @@ async function searchNationByName(name) {
           offensive_wars_count
           defensive_wars_count
           last_active
+          warpolicy
           alliance { name }
         }
       }

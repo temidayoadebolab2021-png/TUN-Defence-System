@@ -372,26 +372,33 @@ async function getLatestTradePrices() {
   const hit = getFromCache(key);
   if (hit) return hit;
 
+  // Confirmed via a live API error that tradeprices is wrapped in a
+  // standard paginator (TradepricePaginator) like every other list query
+  // in this API (nations, wars, warattacks) — the API's own error message
+  // suggested the "data" field directly. The 2021 schema reference that
+  // implied a plain array return type was wrong.
   const data = await pwQuery(`
     query GetTradePrices {
       tradeprices {
-        date
-        coal
-        oil
-        uranium
-        lead
-        iron
-        bauxite
-        gasoline
-        munitions
-        steel
-        aluminum
-        food
+        data {
+          date
+          coal
+          oil
+          uranium
+          lead
+          iron
+          bauxite
+          gasoline
+          munitions
+          steel
+          aluminum
+          food
+        }
       }
     }
   `, {});
 
-  const snapshots = data?.tradeprices || [];
+  const snapshots = data?.tradeprices?.data || [];
   if (snapshots.length === 0) return null;
 
   const latest = [...snapshots].sort((a, b) => new Date(b.date) - new Date(a.date))[0];

@@ -7,6 +7,7 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const { query, run, queryOne } = require('../../utils/database');
 const { buildNationToDiscordMap } = require('../../utils/nationLink');
 const { resolveNation, getAllianceMembers, getNationWars } = require('../../utils/pwApi');
+const logger = require('../../utils/logger');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -55,67 +56,74 @@ module.exports = {
     // ── FIND ────────────────────────────────────────────────
     if (sub === 'find') {
       await interaction.deferReply();
-      const input = interaction.options.getString('attacker');
+      try {
+        const input = interaction.options.getString('attacker');
 
-      await interaction.editReply(`🔍 Looking up **${input}**...`);
+        await interaction.editReply(`🔍 Looking up **${input}**...`);
 
-      const attacker = await resolveNation(input);
-      if (!attacker) {
-        return interaction.editReply(`❌ Could not find nation **"${input}"**. Try the exact name, ID, or P&W link.`);
+        const attacker = await resolveNation(input);
+        if (!attacker) {
+          return interaction.editReply(`❌ Could not find nation **"${input}"**. Try the exact name, ID, or P&W link.`);
+        }
+
+        const guildRow = queryOne('SELECT alliance_id FROM guilds WHERE guild_id = ?', [interaction.guildId]);
+        if (!guildRow?.alliance_id) {
+          return interaction.editReply('❌ No alliance configured. Use `/config alliance` first.');
+        }
+
+        // Get our members (no applicants)
+        const members = await getAllianceMembers(guildRow.alliance_id);
+
+        // War range: a nation can declare on targets whose score is within
+        // 75%-150% of their own. Solved for "which of our members can hit
+        // this specific enemy": member.score must be between
+        // enemy.score/1.5 and enemy.score/0.75. (The previous /1.75 lower
+        // bound didn't correspond to any consistent percentage rule and let
+        // through members who were actually out of real war range.)
+        const minScore = attacker.score / 1.5;
+        const maxScore = attacker.score / 0.75;
+
+        const eligible = members.filter(m => {
+          if (m.score < minScore || m.score > maxScore) return false;
+          if (m.vacation_mode_turns > 0) return false;
+          if (m.offensive_wars_count >= 5) return false;
+          return true;
+        }).map(m => ({ ...m, openSlots: 5 - m.offensive_wars_count }))
+          // Strongest eligible counter first (higher score = more effective
+          // within the same valid war-range window), open slots as tiebreaker.
+          .sort((a, b) => b.score - a.score || b.openSlots - a.openSlots);
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🛡️ Counter Options — ${attacker.nation_name}`)
+          .setColor(0xe74c3c)
+          .addFields(
+            { name: '⚔️ Enemy Nation', value: `[${attacker.nation_name}](https://politicsandwar.com/nation/id=${attacker.id})`, inline: true },
+            { name: '🏛️ Alliance', value: attacker.alliance?.name || 'None', inline: true },
+            { name: '⭐ Score', value: attacker.score?.toLocaleString() || '?', inline: true },
+            { name: '🪖 Military', value: `✈️ ${attacker.aircraft} | 🚗 ${attacker.tanks} | 👮 ${attacker.soldiers?.toLocaleString()} | 🚢 ${attacker.ships}`, inline: false },
+            { name: '📏 Score Range for Counters', value: `${Math.round(minScore).toLocaleString()} – ${Math.round(maxScore).toLocaleString()}`, inline: false },
+          )
+          .setTimestamp();
+
+        const discordMap = buildNationToDiscordMap(interaction.guildId);
+        if (eligible.length === 0) {
+          embed.addFields({ name: '❌ Eligible Counters', value: 'No alliance members are currently in range or have open slots.' });
+        } else {
+          const lines = eligible.slice(0, 10).map(m =>
+            `• **[${m.nation_name}](https://politicsandwar.com/nation/id=${m.id})**${discordMap.get(m.id) ? ` <@${discordMap.get(m.id)}>` : ''} — Score: ${Math.round(m.score).toLocaleString()} | ${m.openSlots} slot(s) open`
+          );
+          embed.addFields({
+            name: `✅ Eligible Counters (${eligible.length})`,
+            value: lines.join('\n') + (eligible.length > 10 ? `\n_...and ${eligible.length - 10} more_` : ''),
+          });
+        }
+
+        embed.setFooter({ text: `Use /counter assign to assign someone | /assign create to assign as a regular target` });
+        return interaction.editReply({ content: '', embeds: [embed] });
+      } catch (err) {
+        logger.error(`/counter find error: ${err.stack || err.message}`);
+        return interaction.editReply('❌ Something went wrong looking that up. Check the bot logs for details.').catch(() => {});
       }
-
-      const guildRow = queryOne('SELECT alliance_id FROM guilds WHERE guild_id = ?', [interaction.guildId]);
-      if (!guildRow?.alliance_id) {
-        return interaction.editReply('❌ No alliance configured. Use `/config alliance` first.');
-      }
-
-      // Get our members (no applicants)
-      const members = await getAllianceMembers(guildRow.alliance_id);
-
-      // War range: a nation can declare on targets whose score is within
-      // 75%-150% of their own. Solved for "which of our members can hit
-      // this specific enemy": member.score must be between
-      // enemy.score/1.5 and enemy.score/0.75. (The previous /1.75 lower
-      // bound didn't correspond to any consistent percentage rule and let
-      // through members who were actually out of real war range.)
-      const minScore = attacker.score / 1.5;
-      const maxScore = attacker.score / 0.75;
-
-      const eligible = members.filter(m => {
-        if (m.score < minScore || m.score > maxScore) return false;
-        if (m.vacation_mode_turns > 0) return false;
-        if (m.offensive_wars_count >= 5) return false;
-        return true;
-      }).map(m => ({ ...m, openSlots: 5 - m.offensive_wars_count }))
-        .sort((a, b) => b.openSlots - a.openSlots);
-
-      const embed = new EmbedBuilder()
-        .setTitle(`🛡️ Counter Options — ${attacker.nation_name}`)
-        .setColor(0xe74c3c)
-        .addFields(
-          { name: '⚔️ Enemy Nation', value: `[${attacker.nation_name}](https://politicsandwar.com/nation/id=${attacker.id})`, inline: true },
-          { name: '🏛️ Alliance', value: attacker.alliance?.name || 'None', inline: true },
-          { name: '⭐ Score', value: attacker.score?.toLocaleString() || '?', inline: true },
-          { name: '🪖 Military', value: `✈️ ${attacker.aircraft} | 🚗 ${attacker.tanks} | 👮 ${attacker.soldiers?.toLocaleString()} | 🚢 ${attacker.ships}`, inline: false },
-          { name: '📏 Score Range for Counters', value: `${Math.round(minScore).toLocaleString()} – ${Math.round(maxScore).toLocaleString()}`, inline: false },
-        )
-        .setTimestamp();
-
-      const discordMap = buildNationToDiscordMap(interaction.guildId);
-      if (eligible.length === 0) {
-        embed.addFields({ name: '❌ Eligible Counters', value: 'No alliance members are currently in range or have open slots.' });
-      } else {
-        const lines = eligible.slice(0, 10).map(m =>
-          `• **[${m.nation_name}](https://politicsandwar.com/nation/id=${m.id})**${discordMap.get(m.id) ? ` <@${discordMap.get(m.id)}>` : ''} — Score: ${Math.round(m.score).toLocaleString()} | ${m.openSlots} slot(s) open`
-        );
-        embed.addFields({
-          name: `✅ Eligible Counters (${eligible.length})`,
-          value: lines.join('\n') + (eligible.length > 10 ? `\n_...and ${eligible.length - 10} more_` : ''),
-        });
-      }
-
-      embed.setFooter({ text: `Use /counter assign to assign someone | /assign create to assign as a regular target` });
-      return interaction.editReply({ content: '', embeds: [embed] });
     }
 
     // ── ASSIGN ──────────────────────────────────────────────

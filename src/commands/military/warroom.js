@@ -37,6 +37,11 @@ module.exports = {
         .setDescription('Set up a war room ahead of time for a planned target, before anyone declares')
         .addStringOption(opt => opt.setName('target').setDescription('Enemy nation name, profile link, or ID').setRequired(true))
         .addStringOption(opt => opt.setName('attackers').setDescription('Comma-separated: @mentions, Discord names, or nation names').setRequired(true))
+    )
+    .addSubcommand(sub =>
+      sub.setName('addmember')
+        .setDescription('Manually add a member to THIS war room — protected from being removed until they declare')
+        .addStringOption(opt => opt.setName('member').setDescription('@mention, Discord name, or nation name').setRequired(true))
     ),
 
   requiredRole: 'military',
@@ -215,6 +220,48 @@ module.exports = {
       if (unresolved.length > 0) embed.addFields({ name: '⚠️ Unresolved', value: unresolved.join('\n').slice(0, 1020), inline: false });
 
       return interaction.editReply({ embeds: [embed] });
+    }
+
+    // ── ADDMEMBER — manually add a protected member to THIS room ─
+    if (sub === 'addmember') {
+      await interaction.deferReply({ flags: 64 });
+
+      const room = queryOne(`SELECT * FROM war_rooms WHERE guild_id=? AND channel_id=? AND status='active'`, [interaction.guildId, interaction.channelId]);
+      if (!room) {
+        return interaction.editReply('❌ This channel isn\'t an active war room. Run this inside the war room channel itself.');
+      }
+
+      const guildRow = queryOne('SELECT alliance_id FROM guilds WHERE guild_id=?', [interaction.guildId]);
+      const allianceMembers = guildRow?.alliance_id ? await getAllianceMembers(guildRow.alliance_id) : [];
+
+      const token = interaction.options.getString('member');
+      const resolved = resolveAttackerToken(token, interaction.guild, interaction.guildId, allianceMembers);
+      if (resolved.error) {
+        return interaction.editReply(`❌ Could not resolve **${token}**: ${resolved.error}`);
+      }
+
+      const alreadyPlanned = queryOne('SELECT id FROM war_room_members WHERE war_room_id=? AND nation_id=? AND war_id IS NULL', [room.id, resolved.nationId]);
+      const alreadyAtWar = queryOne('SELECT id FROM war_room_members WHERE war_room_id=? AND nation_id=? AND war_id IS NOT NULL', [room.id, resolved.nationId]);
+      if (alreadyPlanned || alreadyAtWar) {
+        return interaction.editReply(`⏭️ **${resolved.nationName}** is already tracked in this room.`);
+      }
+
+      // war_id left NULL — this is the exact same mechanic that protects
+      // /warroom create's planned attackers from being auto-removed by
+      // sync's ended-war cleanup, reused here so a manually added member
+      // in a regular (non-planned) room gets the same protection without
+      // needing an actual declared war.
+      run(`INSERT OR IGNORE INTO war_room_members (war_room_id,discord_user_id,nation_id,nation_name,war_id) VALUES(?,?,?,?,NULL)`,
+        [room.id, resolved.discordUserId, resolved.nationId, resolved.nationName]);
+
+      if (resolved.discordUserId) {
+        await interaction.channel.permissionOverwrites.create(resolved.discordUserId, { ViewChannel:true, SendMessages:true }).catch(()=>{});
+      }
+
+      await interaction.channel.send({ content: `📌 ${resolved.discordUserId ? `<@${resolved.discordUserId}>` : `**${resolved.nationName}**`} was manually added to this room — protected from auto-removal until they declare (or are removed manually).` }).catch(()=>{});
+      await sendUnifiedWarCard(interaction.channel, room);
+
+      return interaction.editReply(`✅ Added **${resolved.nationName}** to this room.`);
     }
   },
 };

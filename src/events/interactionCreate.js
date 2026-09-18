@@ -25,7 +25,7 @@ module.exports = {
       try {
         await command.execute(interaction, client);
       } catch (error) {
-        logger.error(`Error in /${interaction.commandName}: ${error.message}`, error);
+        logger.error(`Error in /${interaction.commandName}: ${error.stack || error.message}`);
         const msg = { content: '❌ Something went wrong. The error has been logged.', flags: 64 };
         if (interaction.replied || interaction.deferred) await interaction.followUp(msg).catch(() => {});
         else await interaction.reply(msg).catch(() => {});

@@ -775,7 +775,7 @@ async function createPlannedWarRoom(client, guild, guildId, targetNation, planne
     if (govRole) overwrites.push({ id:govRole.discord_role_id, allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages] });
 
     const safeName = (targetNation.nation_name||'unknown').toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').slice(0,80);
-    channel = await guild.channels.create({ name:`⚔️-${safeName}`, type:ChannelType.GuildText, parent:category.id, topic:`Planned war vs ${targetNation.nation_name} | ${targetNation.alliance?.name||'None'}`, permissionOverwrites:overwrites });
+    channel = await guild.channels.create({ name:`📝⚔️-${safeName}`, type:ChannelType.GuildText, parent:category.id, topic:`[Manually created — will not be auto-closed] Planned war vs ${targetNation.nation_name} | ${targetNation.alliance?.name||'None'}`, permissionOverwrites:overwrites });
 
     run(`INSERT INTO war_rooms (guild_id,channel_id,enemy_nation_id,enemy_nation_name,enemy_alliance_name,status,room_type) VALUES(?,?,?,?,?,'active','planned')`,
       [guildId, channel.id, targetNation.id, targetNation.nation_name, targetNation.alliance?.name||'None']);
@@ -1033,6 +1033,16 @@ async function runWarRoomSync(client, guild, guildId, allianceId, { includeOffen
   for (const room of allActiveRooms) {
     const result = await reconcileRoomPermissions(client, guild, guildId, room);
     if (result.changed) summary.permissionsFixed++;
+
+    // Retroactively mark planned rooms created before the 📝 visual marker
+    // was added, so old manually-created rooms are just as distinguishable
+    // as new ones.
+    if (room.room_type === 'planned') {
+      const roomChannel = guild.channels.cache.get(room.channel_id);
+      if (roomChannel && !roomChannel.name.startsWith('📝')) {
+        await roomChannel.setName(`📝${roomChannel.name}`).catch(()=>{});
+      }
+    }
   }
 
   return summary;

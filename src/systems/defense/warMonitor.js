@@ -200,6 +200,7 @@ async function checkEndedWars(client, guild, guildId, activeWars) {
     ).rows;
     if (!guild || members.length === 0) return;
     for (const member of members) {
+      if (!member.war_id) continue; // planned/manually-added member, not tied to a specific war — never auto-removed here
       if (!activeWarIds.has(String(member.war_id))) {
         await removeMemberFromWarRoom(client, guild, guildId, member.nation_id, member.war_id);
       }

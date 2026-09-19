@@ -36,23 +36,26 @@ const MISSILE_FAIL_GIF= 'https://i.ibb.co/QFsFQH23/ezgif-com-crop-3.gif';       
 const NUKE_GIF        = 'https://i.ibb.co/RpP5fFB4/d75784-56c70b35d16549ff87ecdea76d588e79-mv2.gif'; // successful nuke launch
 const NUKE_FAIL_GIF   = 'https://i.ibb.co/sdy4GPSb/In-Shot-20260831-144508703.gif';        // nuke utter failure / intercepted
 const AIRVGROUND_GIF  = 'https://i.ibb.co/4gs5F5rq/In-Shot-20260901-041723412.gif';        // airstrikes on soldiers and tanks
+const NAVAL_FAIL_GIF  = 'https://i.ibb.co/HSF4dDx/yamato-sinking-ship.gif';                // naval utter failure (ship sinking)
+const GROUND_FAIL_GIF = 'https://i.ibb.co/Kxb0QS5h/1917-explosion.gif';                    // ground attack utter failure
+const AIR_FAIL_GIF    = 'https://i.ibb.co/FLTPn67b/plummet-fall.gif';                      // aircraft/airstrike utter failure (plane going down)
 
 // ── Not yet replaced — verified real-footage Giphy links from before ──
 const FORTIFY_GIF     = 'https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3dyaDZqbXJjMGwyMDRoNTN3M2tkYTRkZnk0dmd5aXNtb2xwZHNxcyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l3vR80tqnUBaZx50A/giphy.gif'; // best-effort match, not a perfect thematic fit
 const PEACE_GIF       = 'https://media1.tenor.com/m/ObWFgyjIM4QAAAAd/peace-dove.gif'; // not yet re-verified as a Giphy link; flag if this fails to render
 
 const GIFS = {
-  GROUND:       { default: [GROUND_GIF] },
-  AIRVINFRA:    { default: [AIRSTRIKE_GIF] },
-  AIRVSOLDIERS: { default: [AIRVGROUND_GIF] },
-  AIRVTANKS:    { default: [AIRVGROUND_GIF] },
-  AIRVMONEY:    { default: [AIRSTRIKE_GIF] },
-  AIRVSHIPS:    { default: [AIRSTRIKE_GIF] },
-  AIRVAIR:      { default: [DOGFIGHT_GIF] },
-  NAVAL:        { default: [NAVAL_GIF] },
-  NAVALVSHIPS:  { default: [NAVAL_GIF] },
-  NAVALVINFRA:  { default: [NAVAL_GIF] },
-  NAVALVMONEY:  { default: [NAVAL_GIF] }, // not yet confirmed live, added defensively to match the AIRV* naming pattern
+  GROUND:       { UTTER_FAILURE: [GROUND_FAIL_GIF], default: [GROUND_GIF] },
+  AIRVINFRA:    { UTTER_FAILURE: [AIR_FAIL_GIF], default: [AIRSTRIKE_GIF] },
+  AIRVSOLDIERS: { UTTER_FAILURE: [AIR_FAIL_GIF], default: [AIRVGROUND_GIF] },
+  AIRVTANKS:    { UTTER_FAILURE: [AIR_FAIL_GIF], default: [AIRVGROUND_GIF] },
+  AIRVMONEY:    { UTTER_FAILURE: [AIR_FAIL_GIF], default: [AIRSTRIKE_GIF] },
+  AIRVSHIPS:    { UTTER_FAILURE: [AIR_FAIL_GIF], default: [AIRSTRIKE_GIF] },
+  AIRVAIR:      { UTTER_FAILURE: [AIR_FAIL_GIF], default: [DOGFIGHT_GIF] },
+  NAVAL:        { UTTER_FAILURE: [NAVAL_FAIL_GIF], default: [NAVAL_GIF] },
+  NAVALVSHIPS:  { UTTER_FAILURE: [NAVAL_FAIL_GIF], default: [NAVAL_GIF] },
+  NAVALVINFRA:  { UTTER_FAILURE: [NAVAL_FAIL_GIF], default: [NAVAL_GIF] },
+  NAVALVMONEY:  { UTTER_FAILURE: [NAVAL_FAIL_GIF], default: [NAVAL_GIF] }, // not yet confirmed live, added defensively to match the AIRV* naming pattern
   MISSILE:      { UTTER_FAILURE: [MISSILE_FAIL_GIF], default: [MISSILE_GIF] },
   MISSILEFAIL:  { default: [MISSILE_FAIL_GIF] },
   NUKE:         { UTTER_FAILURE: [NUKE_FAIL_GIF], default: [NUKE_GIF] },

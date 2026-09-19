@@ -563,10 +563,13 @@ function buildAttackReport(attack, ctx={}) {
 // Unlike normal rooms it has no war_room_members; the set of wars is
 // resolved live from the API instead.
 //
-// BUDGET NOTE: attack polling runs every 8s, but a watched nation's *set*
-// of active wars changes rarely, so that list is cached for 5 minutes.
-// Without this, each watch room would burn ~10,800 extra API calls/day.
-const WATCH_WARS_CACHE_MS = 5 * 60 * 1000;
+// BUDGET NOTE: attack polling is adaptive (see shouldPollNow), but a
+// watched nation's *set* of active wars changes rarely — new wars are
+// declared in hours, not seconds — so that list is cached for 15 minutes.
+// Attacks within already-known wars are still caught at full poll speed;
+// this cache only delays noticing a brand-new war by up to 15 min.
+// Cost per watch room: ~96 API calls/day.
+const WATCH_WARS_CACHE_MS = 15 * 60 * 1000;
 const watchWarsCache = new Map(); // nation_id -> { wars, fetchedAt }
 
 async function getWatchedNationWars(nationId) {
@@ -681,7 +684,39 @@ async function sendWatchRoomCard(channel, room) {
   } catch (err) { logger.error(`sendWatchRoomCard: ${err.message}`); return null; }
 }
 
+// ── ADAPTIVE POLLING ───────────────────────────────────────────
+// The attack poll runs on an 8s cron, but firing an API call every 8s
+// around the clock costs ~10,800 requests/day even when nothing at all is
+// happening — which is most of the day. This backs off automatically when
+// quiet and snaps back to full speed the moment an attack lands, so live
+// fighting still reports in ~8s while idle hours cost almost nothing.
+//
+//   HOT  (attack seen in last 5 min)  -> every 8s   (~10,800/day rate)
+//   WARM (attack seen in last 30 min) -> every 32s  (~2,700/day rate)
+//   COLD (nothing recent)             -> every 96s  (~900/day rate)
+const POLL_HOT_MS  = 5  * 60 * 1000;
+const POLL_WARM_MS = 30 * 60 * 1000;
+// Start HOT: if the bot restarts mid-war, it should poll fast immediately
+// rather than sitting in COLD mode for up to 96s while fighting is live.
+// It settles into WARM/COLD on its own if nothing actually happens.
+let lastAttackSeenAt = Date.now();
+let lastPollAt = 0;
+let highestAttackIdSeen = 0;
+
+function shouldPollNow() {
+  const now = Date.now();
+  const sinceAttack = now - lastAttackSeenAt;
+  const requiredGap =
+    sinceAttack < POLL_HOT_MS  ? 8000  :
+    sinceAttack < POLL_WARM_MS ? 32000 :
+                                 96000;
+  if (now - lastPollAt < requiredGap) return false;
+  lastPollAt = now;
+  return true;
+}
+
 async function checkWarRoomAttacks(client) {
+  if (!shouldPollNow()) return;
   const rooms = query(`SELECT wr.* FROM war_rooms wr WHERE wr.status='active'`, []).rows;
   if (rooms.length === 0) return;
 
@@ -744,6 +779,21 @@ async function checkWarRoomAttacks(client) {
 
   const allAttacks = await fetchAttacksBatch([...warMap.keys()]);
   if (allAttacks.length === 0) return;
+
+  // The batch query always returns recent history, so "got results" doesn't
+  // mean "something new happened". Track the highest attack ID seen instead
+  // — if it climbs, there's genuinely fresh combat and we go back to fast
+  // polling. First run just establishes a baseline without falsely
+  // triggering HOT mode.
+  let maxId = 0;
+  for (const a of allAttacks) {
+    const id = parseInt(a.id);
+    if (id > maxId) maxId = id;
+  }
+  if (highestAttackIdSeen > 0 && maxId > highestAttackIdSeen) {
+    lastAttackSeenAt = Date.now();
+  }
+  if (maxId > highestAttackIdSeen) highestAttackIdSeen = maxId;
 
   // Group by war_id so each room only processes its own attacks.
   const byWar = new Map();

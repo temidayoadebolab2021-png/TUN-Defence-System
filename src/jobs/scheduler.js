@@ -97,7 +97,7 @@ async function startAllJobs(client) {
     }
   });
 
-  logger.info('✅ Scheduler — defense 60s | attacks 8s | DNR 3min | beige 5min | military/vacation 15min | expiry 30min | warroom autosync 15min | backup 6h | daily 08:00 UTC');
+  logger.info('✅ Scheduler — defense 60s | attacks adaptive 8s-96s | DNR 3min | beige 5min | military/vacation 15min | expiry 30min | warroom autosync 15min | backup 6h | daily 08:00 UTC');
 }
 
 async function runWarRoomAutoSync(client) {

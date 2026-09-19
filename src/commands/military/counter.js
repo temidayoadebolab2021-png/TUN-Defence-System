@@ -109,12 +109,19 @@ module.exports = {
         if (eligible.length === 0) {
           embed.addFields({ name: '❌ Eligible Counters', value: 'No alliance members are currently in range or have open slots.' });
         } else {
-          const lines = eligible.slice(0, 10).map(m =>
-            `• **[${m.nation_name}](https://politicsandwar.com/nation/id=${m.id})**${discordMap.get(m.id) ? ` <@${discordMap.get(m.id)}>` : ''} — Score: ${Math.round(m.score).toLocaleString()} | ${m.openSlots} slot(s) open`
+          // Each line is ~180 chars worst-case now that military stats are
+          // included, so cap at 5 to stay safely under Discord's hard
+          // 1024-char per-field limit (10 would overflow and error out).
+          const MAX_SHOWN = 5;
+          const lines = eligible.slice(0, MAX_SHOWN).map(m =>
+            `• **[${m.nation_name}](https://politicsandwar.com/nation/id=${m.id})**${discordMap.get(m.id) ? ` <@${discordMap.get(m.id)}>` : ''}\n` +
+            `└ ⭐ ${Math.round(m.score).toLocaleString()} | 👮 ${(m.soldiers||0).toLocaleString()} | 🚗 ${(m.tanks||0).toLocaleString()} | ✈️ ${m.aircraft||0} | 🚢 ${m.ships||0} | 🎯 ${m.openSlots} slot(s)`
           );
+          let value = lines.join('\n') + (eligible.length > MAX_SHOWN ? `\n_...and ${eligible.length - MAX_SHOWN} more in range_` : '');
+          if (value.length > 1024) value = value.slice(0, 1010) + '\n_(truncated)_';
           embed.addFields({
-            name: `✅ Eligible Counters (${eligible.length})`,
-            value: lines.join('\n') + (eligible.length > 10 ? `\n_...and ${eligible.length - 10} more_` : ''),
+            name: `✅ Eligible Counters (${eligible.length}) — strongest first`,
+            value,
           });
         }
 

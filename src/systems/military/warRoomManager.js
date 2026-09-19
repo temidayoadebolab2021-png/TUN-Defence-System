@@ -557,6 +557,130 @@ function buildAttackReport(attack, ctx={}) {
   return embed;
 }
 
+// ── WATCH ROOMS ────────────────────────────────────────────────
+// A watch room tracks EVERY active war of an arbitrary nation — including
+// nations that aren't in our alliance and wars we're not part of at all.
+// Unlike normal rooms it has no war_room_members; the set of wars is
+// resolved live from the API instead.
+//
+// BUDGET NOTE: attack polling runs every 8s, but a watched nation's *set*
+// of active wars changes rarely, so that list is cached for 5 minutes.
+// Without this, each watch room would burn ~10,800 extra API calls/day.
+const WATCH_WARS_CACHE_MS = 5 * 60 * 1000;
+const watchWarsCache = new Map(); // nation_id -> { wars, fetchedAt }
+
+async function getWatchedNationWars(nationId) {
+  const key = String(nationId);
+  const hit = watchWarsCache.get(key);
+  if (hit && (Date.now() - hit.fetchedAt) < WATCH_WARS_CACHE_MS) return hit.wars;
+  try {
+    const wars = await getNationWars(nationId);
+    watchWarsCache.set(key, { wars, fetchedAt: Date.now() });
+    return wars;
+  } catch (err) {
+    logger.error(`getWatchedNationWars(${nationId}): ${err.message}`);
+    return hit?.wars || []; // fall back to stale data rather than going blind
+  }
+}
+
+async function createWatchWarRoom(client, guild, guildId, targetNation) {
+  const catRow = queryOne(`SELECT setting_value FROM alert_settings WHERE guild_id=? AND alert_type='warroom' AND setting_key='category_id'`, [guildId]);
+  if (!catRow) return { error: 'No war room category configured. Run `/warroom setup` first.' };
+  const category = guild.channels.cache.get(catRow.setting_value);
+  if (!category) return { error: 'Configured war room category no longer exists.' };
+
+  const childCount = guild.channels.cache.filter(c => c.parentId === category.id).size;
+  if (childCount >= 50) return { error: `War room category "${category.name}" is full (50 channels).` };
+
+  const existing = queryOne('SELECT * FROM war_rooms WHERE guild_id=? AND enemy_nation_id=? AND status=?', [guildId, targetNation.id, 'active']);
+  if (existing) {
+    return { error: `A room already exists for **${targetNation.nation_name}** (<#${existing.channel_id}>). Delete it first if you want a watch room instead.` };
+  }
+
+  const milRole = queryOne(`SELECT discord_role_id FROM guild_roles WHERE guild_id=? AND role_type='military'`, [guildId]);
+  const govRole = queryOne(`SELECT discord_role_id FROM guild_roles WHERE guild_id=? AND role_type='government'`, [guildId]);
+  const overwrites = [{ id:guild.roles.everyone.id, deny:[PermissionFlagsBits.ViewChannel] }];
+  if (milRole) overwrites.push({ id:milRole.discord_role_id, allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages] });
+  if (govRole) overwrites.push({ id:govRole.discord_role_id, allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages] });
+
+  const safeName = (targetNation.nation_name||'unknown').toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').slice(0,80);
+  // 🔭 marks a watch room, distinct from 📝 (manually planned) and plain ⚔️ (automatic).
+  const channel = await guild.channels.create({
+    name: `🔭-${safeName}`,
+    type: ChannelType.GuildText,
+    parent: category.id,
+    topic: `[WATCH ROOM — surveillance only, never auto-closed] Tracking all active wars of ${targetNation.nation_name} | ${targetNation.alliance?.name||'None'}`,
+    permissionOverwrites: overwrites,
+  });
+
+  run(`INSERT INTO war_rooms (guild_id,channel_id,enemy_nation_id,enemy_nation_name,enemy_alliance_name,status,room_type) VALUES(?,?,?,?,?,'active','watch')`,
+    [guildId, channel.id, targetNation.id, targetNation.nation_name, targetNation.alliance?.name||'None']);
+
+  const roomRow = queryOne('SELECT * FROM war_rooms WHERE guild_id=? AND channel_id=?', [guildId, channel.id]);
+
+  const wars = await getWatchedNationWars(targetNation.id);
+  await channel.send({ content:
+    `🔭 **Watch Room Created** — now tracking **${targetNation.nation_name}** of ${targetNation.alliance?.name||'None'}.\n` +
+    `Currently in **${wars.length}** active war(s). Every attack in any of their wars will be reported here.\n` +
+    `_This room is surveillance only — it won't be auto-closed. Delete it manually when you're done._`
+  }).catch(()=>{});
+
+  await sendWatchRoomCard(channel, roomRow);
+
+  logger.info(`Watch room created: ${channel.name} tracking nation ${targetNation.id}`);
+  return { id: roomRow.id, channel_id: channel.id, warsTracked: wars.length };
+}
+
+// Watch rooms don't have war_room_members, so they get their own card
+// listing the watched nation plus every war it's currently in.
+async function sendWatchRoomCard(channel, room) {
+  try {
+    if (room.card_message_id) {
+      const oldMsg = await channel.messages.fetch(room.card_message_id).catch(()=>null);
+      if (oldMsg) await oldMsg.delete().catch(()=>{});
+    }
+
+    const [nationData, wars] = await Promise.all([
+      fetchNationData(room.enemy_nation_id),
+      getWatchedNationWars(room.enemy_nation_id),
+    ]);
+
+    const embed = new EmbedBuilder()
+      .setColor(0x9b59b6)
+      .setTitle(`🔭 Watching — ${nationData?.nation_name || room.enemy_nation_name || 'Unknown'}`)
+      .setDescription(`[View Nation](https://politicsandwar.com/nation/id=${room.enemy_nation_id}) | Alliance: **${nationData?.alliance?.name || room.enemy_alliance_name || 'None'}**`)
+      .addFields({
+        name: '📊 Nation',
+        value: [
+          `⭐ NS: **${Math.round(nationData?.score||0).toLocaleString()}** | 🏙️ Cities: **${nationData?.num_cities??'?'}**`,
+          `👮 ${(nationData?.soldiers||0).toLocaleString()} | 🚗 ${(nationData?.tanks||0).toLocaleString()} | ✈️ ${nationData?.aircraft||0} | 🚢 ${nationData?.ships||0}`,
+          `🚀 ${nationData?.missiles||0} | ☢️ ${nationData?.nukes||0} | 🕵️ ${nationData?.spies||0}`,
+        ].join('\n'),
+        inline: false,
+      })
+      .setTimestamp();
+
+    if (wars.length === 0) {
+      embed.addFields({ name: '⚔️ Active Wars', value: 'None right now — attacks will appear here automatically when they enter a war.', inline: false });
+    } else {
+      const warLines = wars.slice(0, 10).map(w => {
+        const isAtt = String(w.attid) === String(room.enemy_nation_id);
+        const them = isAtt ? w.defender : w.attacker;
+        const side = isAtt ? '⚔️ attacking' : '🛡️ defending vs';
+        return `${side} **${them?.nation_name||'Unknown'}**${them?.alliance?.name ? ` of ${them.alliance.name}` : ''} — [war](https://politicsandwar.com/nation/war/timeline/war=${w.id}) (${w.turnsleft ?? '?'} turns left)`;
+      });
+      let value = warLines.join('\n');
+      if (value.length > 1024) value = value.slice(0, 1010) + '\n_(truncated)_';
+      embed.addFields({ name: `⚔️ Active Wars (${wars.length})`, value, inline: false });
+    }
+
+    const newMsg = await channel.send({ embeds: [embed] });
+    await newMsg.pin().catch(()=>{});
+    run('UPDATE war_rooms SET card_message_id=? WHERE id=?', [newMsg.id, room.id]);
+    return newMsg;
+  } catch (err) { logger.error(`sendWatchRoomCard: ${err.message}`); return null; }
+}
+
 async function checkWarRoomAttacks(client) {
   const rooms = query(`SELECT wr.* FROM war_rooms wr WHERE wr.status='active'`, []).rows;
   if (rooms.length === 0) return;
@@ -568,6 +692,32 @@ async function checkWarRoomAttacks(client) {
   const warMap = new Map(); // war_id -> { room, ctx }
   const guildAllianceNames = new Map(); // guild_id -> alliance_name, avoids re-querying per room
   for (const room of rooms) {
+    // ── Watch rooms: no members, wars resolved live from the API ──
+    if (room.room_type === 'watch') {
+      const wars = await getWatchedNationWars(room.enemy_nation_id);
+      for (const w of wars) {
+        if (warMap.has(String(w.id))) continue;
+        const watchedIsAtt = String(w.attid) === String(room.enemy_nation_id);
+        const watched = watchedIsAtt ? w.attacker : w.defender;
+        const opponent = watchedIsAtt ? w.defender : w.attacker;
+        warMap.set(String(w.id), {
+          room,
+          // For a watch room neither side is "ours" — map the watched
+          // nation onto the "our" slot purely so name/alliance resolution
+          // in buildAttackReport works for both participants.
+          ctx: {
+            ourNationId:       room.enemy_nation_id,
+            ourNationName:     watched?.nation_name || room.enemy_nation_name,
+            ourAllianceName:   watched?.alliance?.name || room.enemy_alliance_name,
+            enemyNationId:     watchedIsAtt ? w.defid : w.attid,
+            enemyNationName:   opponent?.nation_name || 'Unknown',
+            enemyAllianceName: opponent?.alliance?.name || null,
+          },
+        });
+      }
+      continue;
+    }
+
     if (!guildAllianceNames.has(room.guild_id)) {
       const g = queryOne('SELECT alliance_name FROM guilds WHERE guild_id=?', [room.guild_id]);
       guildAllianceNames.set(room.guild_id, g?.alliance_name || null);
@@ -644,7 +794,11 @@ async function sendWarAttacks(client, room, war_id, ctx, attacks) {
 
 async function getOrCreateWarRoom(client, guild, guildId, enemyNation, ourDiscordId, ourMemberName, war, isCounter, counterDetail) {
   try {
-    const existing = queryOne('SELECT * FROM war_rooms WHERE guild_id=? AND enemy_nation_id=? AND status=?', [guildId, enemyNation.id, 'active']);
+    // Watch rooms are surveillance-only and deliberately excluded here: if
+    // we later end up actually at war with a nation we're watching, that
+    // should create its own normal war room rather than converting the
+    // watch room (which has no members and a different card format).
+    const existing = queryOne(`SELECT * FROM war_rooms WHERE guild_id=? AND enemy_nation_id=? AND status=? AND COALESCE(room_type,'auto') != 'watch'`, [guildId, enemyNation.id, 'active']);
     if (existing) {
       // The DB row can outlive the actual Discord channel if someone
       // deletes the channel manually instead of through the bot — the row
@@ -1066,4 +1220,4 @@ async function removeMemberFromWarRoom(client, guild, guildId, nationId, warId) 
   } catch (err) { logger.error(`removeMemberFromWarRoom: ${err.message}`); }
 }
 
-module.exports = { getOrCreateWarRoom, removeMemberFromWarRoom, buildWarButtons, fetchWarData, fetchNationData, sendUnifiedWarCard, checkWarRoomAttacks, isInactiveNation, daysSinceActive, closeWarRoomForInactivity, INACTIVITY_DAYS, runWarRoomSync, reconcileRoomPermissions, createPlannedWarRoom, recoverWarRoomChannel };
+module.exports = { getOrCreateWarRoom, removeMemberFromWarRoom, buildWarButtons, fetchWarData, fetchNationData, sendUnifiedWarCard, checkWarRoomAttacks, isInactiveNation, daysSinceActive, closeWarRoomForInactivity, INACTIVITY_DAYS, runWarRoomSync, reconcileRoomPermissions, createPlannedWarRoom, recoverWarRoomChannel, createWatchWarRoom, sendWatchRoomCard };

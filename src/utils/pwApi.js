@@ -418,8 +418,8 @@ async function getNationWars(nationId) {
           defid
           att_alliance_id
           def_alliance_id
-          attacker { nation_name score }
-          defender { nation_name score }
+          attacker { id nation_name score alliance { name } }
+          defender { id nation_name score alliance { name } }
           turnsleft
         }
       }

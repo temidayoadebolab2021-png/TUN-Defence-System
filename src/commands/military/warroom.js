@@ -4,7 +4,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, ChannelType } = require('discord.js');
 const { run, queryOne, query } = require('../../utils/database');
-const { isInactiveNation, sendUnifiedWarCard, runWarRoomSync, createPlannedWarRoom, recoverWarRoomChannel } = require('../../systems/military/warRoomManager');
+const { isInactiveNation, sendUnifiedWarCard, runWarRoomSync, createPlannedWarRoom, recoverWarRoomChannel, createWatchWarRoom, sendWatchRoomCard } = require('../../systems/military/warRoomManager');
 const { resolveNation, getAllianceMembers } = require('../../utils/pwApi');
 const { getLinkedNation, buildNationToDiscordMap } = require('../../utils/nationLink');
 
@@ -42,6 +42,11 @@ module.exports = {
       sub.setName('addmember')
         .setDescription('Manually add a member to THIS war room — protected from being removed until they declare')
         .addStringOption(opt => opt.setName('member').setDescription('@mention, Discord name, or nation name').setRequired(true))
+    )
+    .addSubcommand(sub =>
+      sub.setName('watch')
+        .setDescription('Track ALL active wars of any nation in the game, even non-members')
+        .addStringOption(opt => opt.setName('target').setDescription('Nation name, profile link, or ID to watch').setRequired(true))
     ),
 
   requiredRole: 'military',
@@ -120,6 +125,13 @@ module.exports = {
         // Room was just recovered and its card already sent by the recovery
         // path itself — no need to build a second one below.
         return interaction.editReply(`✅ Recovered tracking for this room (matched **${recovery.enemyName}**, ${recovery.warsFound} active war(s)) — card posted above.`);
+      }
+
+      // Watch rooms have no members and use a different card format.
+      if (room.room_type === 'watch') {
+        const watchCard = await sendWatchRoomCard(interaction.channel, room);
+        if (!watchCard) return interaction.editReply('❌ Something went wrong building the watch card. Check the bot logs.');
+        return interaction.editReply('✅ Watch card regenerated — check the bottom of the channel (it\'s pinned).');
       }
 
       const memberCount = query('SELECT COUNT(*) as c FROM war_room_members WHERE war_room_id=?', [room.id]).rows[0]?.c || 0;
@@ -262,6 +274,24 @@ module.exports = {
       await sendUnifiedWarCard(interaction.channel, room);
 
       return interaction.editReply(`✅ Added **${resolved.nationName}** to this room.`);
+    }
+
+    // ── WATCH — surveillance room for any nation's wars ──────
+    if (sub === 'watch') {
+      await interaction.deferReply({ flags: 64 });
+
+      const targetInput = interaction.options.getString('target');
+      const targetNation = await resolveNation(targetInput);
+      if (!targetNation) return interaction.editReply(`❌ Could not find a nation matching "${targetInput}".`);
+
+      const result = await createWatchWarRoom(interaction.client, interaction.guild, interaction.guildId, targetNation);
+      if (result.error) return interaction.editReply(`❌ ${result.error}`);
+
+      return interaction.editReply(
+        `✅ Watch room created: <#${result.channel_id}>\n` +
+        `Tracking **${targetNation.nation_name}** — currently in **${result.warsTracked}** active war(s). ` +
+        `Every attack in any of their wars will be reported there automatically.`
+      );
     }
   },
 };

@@ -225,7 +225,7 @@ async function checkInactiveWarRooms(client, guild, guildId, allWars) {
     }
 
     for (const room of rooms) {
-      if (room.room_type === 'planned') continue; // manually created rooms are only ever closed manually, never auto-closed for inactivity
+      if (room.room_type === 'planned' || room.room_type === 'watch') continue; // manually created and watch rooms are only ever closed manually, never auto-closed for inactivity
       const lastActive = lastActiveByNation.get(String(room.enemy_nation_id));
       if (lastActive === undefined) continue; // war ended this cycle — checkEndedWars already handles that path
       if (isInactiveNation(lastActive)) {

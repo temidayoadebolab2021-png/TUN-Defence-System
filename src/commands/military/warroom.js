@@ -211,7 +211,7 @@ module.exports = {
 
       const resolved = [], unresolved = [];
       for (const token of tokens) {
-        const result = resolveAttackerToken(token, interaction.guild, interaction.guildId, allianceMembers);
+        const result = await resolveAttackerToken(token, interaction.guild, interaction.guildId, allianceMembers);
         if (result.error) unresolved.push(`**${token}**: ${result.error}`);
         else resolved.push(result);
       }
@@ -247,7 +247,7 @@ module.exports = {
       const allianceMembers = guildRow?.alliance_id ? await getAllianceMembers(guildRow.alliance_id) : [];
 
       const token = interaction.options.getString('member');
-      const resolved = resolveAttackerToken(token, interaction.guild, interaction.guildId, allianceMembers);
+      const resolved = await resolveAttackerToken(token, interaction.guild, interaction.guildId, allianceMembers);
       if (resolved.error) {
         return interaction.editReply(`❌ Could not resolve **${token}**: ${resolved.error}`);
       }
@@ -302,7 +302,7 @@ module.exports = {
 // is required to track the planned attacker (it's what later links their
 // real declaration back to this row), so an unlinked Discord mention with
 // no nation is reported as an error rather than silently added broken.
-function resolveAttackerToken(token, guild, guildId, allianceMembers) {
+async function resolveAttackerToken(token, guild, guildId, allianceMembers) {
   token = token.trim();
   if (!token) return { error: 'empty' };
 
@@ -334,5 +334,15 @@ function resolveAttackerToken(token, guild, guildId, allianceMembers) {
     return { discordUserId: dId, nationId: match.id, nationName: match.nation_name };
   }
 
-  return { error: 'could not match to a Discord member or alliance nation' };
+  // Not one of our own members — could be an ally from a treaty partner
+  // (e.g. sent to counter under a defensive pact). Fall back to resolving
+  // ANY nation in the game by name/link/ID.
+  const anyNation = await resolveNation(token);
+  if (anyNation) {
+    const map = buildNationToDiscordMap(guildId);
+    const dId = map.get(anyNation.id) || map.get(String(anyNation.id)) || null;
+    return { discordUserId: dId, nationId: anyNation.id, nationName: anyNation.nation_name };
+  }
+
+  return { error: 'could not match to a Discord member, alliance nation, or any nation in the game' };
 }

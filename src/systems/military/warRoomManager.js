@@ -759,9 +759,26 @@ async function checkWarRoomAttacks(client) {
     }
     const ourAllianceName = guildAllianceNames.get(room.guild_id);
 
-    const members = query('SELECT DISTINCT war_id, nation_id, nation_name FROM war_room_members WHERE war_room_id=?', [room.id]).rows;
-    for (const { war_id, nation_id, nation_name } of members) {
-      if (!war_id || warMap.has(String(war_id))) continue;
+    const members = query('SELECT id, war_id, nation_id, nation_name, discord_user_id FROM war_room_members WHERE war_room_id=?', [room.id]).rows;
+    for (const m of members) {
+      let { id: memberRowId, war_id, nation_id, nation_name } = m;
+
+      if (!war_id) {
+        // No war attached yet — this member was added via /warroom addmember
+        // (either one of our own not-yet-declared members, or an ally from
+        // a treaty partner sent to counter under a pact). Check live
+        // (cached, same as watch rooms) whether they've now declared
+        // against this room's enemy, and if so activate them in place
+        // instead of leaving them silently untracked forever.
+        const theirWars = await getWatchedNationWars(nation_id);
+        const matched = theirWars.find(w => String(w.attid) === String(room.enemy_nation_id) || String(w.defid) === String(room.enemy_nation_id));
+        if (!matched) continue;
+        war_id = matched.id;
+        run('UPDATE war_room_members SET war_id=? WHERE id=?', [war_id, memberRowId]);
+        logger.info(`Activated protected member ${nation_name} (nation ${nation_id}) in room ${room.id} — war ${war_id} found live.`);
+      }
+
+      if (warMap.has(String(war_id))) continue;
       warMap.set(String(war_id), {
         room,
         ctx: {

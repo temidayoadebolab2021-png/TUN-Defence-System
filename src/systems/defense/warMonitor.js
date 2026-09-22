@@ -9,7 +9,7 @@ const { query, run, queryOne } = require('../../utils/database');
 const { pwQuery, getAllianceMembers, MEMBER_POSITIONS } = require('../../utils/pwApi');
 const { buildNationToDiscordMap } = require('../../utils/nationLink');
 const { isLegitimateCounter, syncTreatiesFromPW } = require('../../utils/counterDetector');
-const { removeMemberFromWarRoom, isInactiveNation, daysSinceActive, closeWarRoomForInactivity } = require('../military/warRoomManager');
+const { removeMemberFromWarRoom, isInactiveNation, daysSinceActive, closeWarRoomForInactivity, getWatchedNationWars } = require('../military/warRoomManager');
 const logger = require('../../utils/logger');
 
 const checking       = new Set();
@@ -195,15 +195,27 @@ async function checkEndedWars(client, guild, guildId, activeWars) {
   try {
     const activeWarIds = new Set(activeWars.map(w => String(w.id)));
     const members = query(
-      `SELECT wrm.*, wr.channel_id FROM war_room_members wrm JOIN war_rooms wr ON wr.id=wrm.war_room_id WHERE wr.guild_id=? AND wr.status='active'`,
+      `SELECT wrm.*, wr.channel_id, wr.enemy_nation_id FROM war_room_members wrm JOIN war_rooms wr ON wr.id=wrm.war_room_id WHERE wr.guild_id=? AND wr.status='active'`,
       [guildId]
     ).rows;
     if (!guild || members.length === 0) return;
     for (const member of members) {
       if (!member.war_id) continue; // planned/manually-added member, not tied to a specific war — never auto-removed here
-      if (!activeWarIds.has(String(member.war_id))) {
-        await removeMemberFromWarRoom(client, guild, guildId, member.nation_id, member.war_id);
-      }
+      if (activeWarIds.has(String(member.war_id))) continue; // confirmed still active via our own alliance's war list
+
+      // Not in OUR alliance's active-wars list — but that list ONLY ever
+      // contains wars where our alliance participates. A treaty-partner
+      // ally added via /warroom addmember (e.g. countering under a
+      // defensive pact) will NEVER appear there even while their war is
+      // fully active, since neither side is our alliance. Before assuming
+      // the war ended, confirm live (cached, same lookup watch rooms use)
+      // rather than trusting an alliance-scoped list that was never going
+      // to include this member's war in the first place.
+      const theirWars = await getWatchedNationWars(member.nation_id);
+      const stillActive = theirWars.some(w => String(w.id) === String(member.war_id));
+      if (stillActive) continue;
+
+      await removeMemberFromWarRoom(client, guild, guildId, member.nation_id, member.war_id);
     }
   } catch (err) {
     logger.error(`checkEndedWars error: ${err.message}`);

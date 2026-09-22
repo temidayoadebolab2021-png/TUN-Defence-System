@@ -1277,7 +1277,8 @@ async function removeMemberFromWarRoom(client, guild, guildId, nationId, warId) 
     const channel = guild.channels.cache.get(member.channel_id);
     if (channel) {
       if (member.discord_user_id) await channel.permissionOverwrites.delete(member.discord_user_id).catch(()=>{});
-      await channel.send({ content:`✅ <@${member.discord_user_id}>'s war ended — removed from this room.` });
+      const who = member.discord_user_id ? `<@${member.discord_user_id}>` : `**${member.nation_name || `Nation #${nationId}`}**`;
+      await channel.send({ content:`✅ ${who}'s war ended — removed from this room.` });
     }
     const remaining = query('SELECT * FROM war_room_members WHERE war_room_id=?', [member.room_id]).rows;
     if (remaining.length===0) {
@@ -1287,4 +1288,4 @@ async function removeMemberFromWarRoom(client, guild, guildId, nationId, warId) 
   } catch (err) { logger.error(`removeMemberFromWarRoom: ${err.message}`); }
 }
 
-module.exports = { getOrCreateWarRoom, removeMemberFromWarRoom, buildWarButtons, fetchWarData, fetchNationData, sendUnifiedWarCard, checkWarRoomAttacks, isInactiveNation, daysSinceActive, closeWarRoomForInactivity, INACTIVITY_DAYS, runWarRoomSync, reconcileRoomPermissions, createPlannedWarRoom, recoverWarRoomChannel, createWatchWarRoom, sendWatchRoomCard };
+module.exports = { getOrCreateWarRoom, removeMemberFromWarRoom, buildWarButtons, fetchWarData, fetchNationData, sendUnifiedWarCard, checkWarRoomAttacks, isInactiveNation, daysSinceActive, closeWarRoomForInactivity, INACTIVITY_DAYS, runWarRoomSync, reconcileRoomPermissions, createPlannedWarRoom, recoverWarRoomChannel, createWatchWarRoom, sendWatchRoomCard, getWatchedNationWars };
